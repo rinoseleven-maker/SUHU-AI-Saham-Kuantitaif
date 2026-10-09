@@ -43,13 +43,20 @@ _HERE = Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------- secrets
 def _secret(name, default=""):
+    """Fungsi pembacaan rahasia yang fleksibel untuk Streamlit Cloud (st.secrets) & OS (os.getenv)."""
+    val = None
+    # 1. Coba baca dari Streamlit Secrets (Streamlit Cloud / .streamlit/secrets.toml)
     try:
-        v = st.secrets.get(name, default)
+        if hasattr(st, "secrets") and name in st.secrets:
+            val = st.secrets[name]
     except Exception:
-        v = default
-    if v in (None, ""):
-        v = os.environ.get(name, default)
-    return v
+        pass
+
+    # 2. Jika tidak ditemukan di st.secrets, coba baca dari Environment Variables (Lokal/VPS/.env)
+    if val in (None, ""):
+        val = os.environ.get(name, default)
+
+    return str(val) if val is not None else str(default)
 
 
 def _rupiah(n):
@@ -68,7 +75,7 @@ def _sig(secret, exp, kid):
 
 def make_key(days=ACCESS_DAYS):
     """Buat Access Key pelanggan. Kembalikan (key, tanggal_kadaluarsa)."""
-    secret = str(_secret("LICENSE_SECRET"))
+    secret = _secret("LICENSE_SECRET")
     if len(secret) < 16:
         raise ValueError("LICENSE_SECRET belum diisi (minimal 16 karakter) di Secrets.")
     exp_date = datetime.now(WIB).date() + timedelta(days=int(days))
@@ -86,10 +93,10 @@ def check_key(raw):
     raw = (raw or "").strip()
     if not raw:
         return "invalid", {}
-    admin = str(_secret("ADMIN_KEY"))
+    admin = _secret("ADMIN_KEY")
     if admin and len(admin) >= 8 and hmac.compare_digest(raw.encode(), admin.encode()):
         return "admin", {"kid": "ADMIN", "exp": None}
-    secret = str(_secret("LICENSE_SECRET"))
+    secret = _secret("LICENSE_SECRET")
     if len(secret) < 16:
         return "not_configured", {}
     norm = re.sub(r"\s+", "", raw).upper()
@@ -104,10 +111,15 @@ def check_key(raw):
         exp_date = datetime.strptime(exp, "%y%m%d").date()
     except ValueError:
         return "invalid", {}
-    revoked = _secret("REVOKED", [])
-    if isinstance(revoked, str):
-        revoked = [x.strip().upper() for x in revoked.split(",") if x.strip()]
-    if kid in [str(x).upper() for x in revoked]:
+    
+    revoked_raw = _secret("REVOKED", "")
+    revoked = []
+    if isinstance(revoked_raw, str) and revoked_raw:
+        revoked = [x.strip().upper() for x in revoked_raw.split(",") if x.strip()]
+    elif isinstance(revoked_raw, (list, tuple)):
+        revoked = [str(x).strip().upper() for x in revoked_raw]
+        
+    if kid in revoked:
         return "revoked", {"kid": kid, "exp": exp_date}
     if datetime.now(WIB).date() > exp_date:
         return "expired", {"kid": kid, "exp": exp_date}
@@ -223,7 +235,7 @@ def _render_home(message=None, level="error"):
         (st.error if level == "error" else st.warning)(message)
     with st.form("login_form", clear_on_submit=False):
         key = st.text_input("Access Key", type="password", placeholder="SUHU-xxxxxx-xxxx-xxxx-xxxx-xxxx-xxxx",
-                            label_visibility="collapsed")
+                           label_visibility="collapsed")
         remember = st.checkbox("Ingat di perangkat ini", value=True)
         go = st.form_submit_button("Masuk", type="primary", use_container_width=True)
     if go:
@@ -265,8 +277,8 @@ def _render_home(message=None, level="error"):
 
     st.markdown(f"""
 <div class="h-card h-disc"><b>Syarat singkat</b><br>
-• Access Key bersifat pribadi, maksimal dipakai di {MAX_DEVICES} perangkat aktif bersamaan, dan tidak boleh dibagikan atau dijual kembali.<br>
-• Masa aktif {ACCESS_DAYS} hari dihitung sejak key diterbitkan.<br><br>
+- Access Key bersifat pribadi, maksimal dipakai di {MAX_DEVICES} perangkat aktif bersamaan, dan tidak boleh dibagikan atau dijual kembali.<br>
+- Masa aktif {ACCESS_DAYS} hari dihitung sejak key diterbitkan.<br><br>
 <b>Penafian</b><br>
 {APP_NAME} adalah alat bantu analisis kuantitatif untuk tujuan informasi dan edukasi — <b>bukan</b> nasihat, ajakan, atau
 rekomendasi investasi resmi. Hasil backtest, simulasi Monte Carlo, dan kinerja masa lalu tidak menjamin hasil di masa depan.
